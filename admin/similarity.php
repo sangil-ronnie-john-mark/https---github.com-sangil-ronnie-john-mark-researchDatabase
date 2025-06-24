@@ -1,6 +1,12 @@
 <?php
-
+SESSION_START();
 require_once '../config/dbcon.php';
+if (!$_SESSION['login_status']) {
+    $_SESSION['error'] = "Invalid Token";
+    header('Location: ../');
+    exit();
+}
+
 $search = $_POST['search'] ?? '';
 $text1 = <<<EOT
 $search
