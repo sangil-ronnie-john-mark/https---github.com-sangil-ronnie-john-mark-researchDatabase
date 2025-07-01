@@ -9,7 +9,7 @@ if (!$_SESSION['login_status']) {
 include '../config/dbcon.php'; // This must define $conn = new mysqli(...)
 
 $search = trim($_GET['search'] ?? '');
-$page = $_GET['page'] ?? 1; // Get current page, default to 1
+$page = (int)($_GET['page'] ?? 1); // Get current page, default to 1
 $limit = 5; // Number of results per page
 $offset = ($page - 1) * $limit;
 $selectedYear = $_GET['year'] ?? ''; // Get selected year from sidebar
@@ -59,26 +59,42 @@ if (!$countStmt) {
 
 // Bind parameters for the count query if any exist
 if (!empty($params)) {
-    // We need a temporary types string for the count query as it doesn't include limit/offset
-    $tempCountParams = array_slice($params, 0, count($params)); // Copy params before limit/offset are added
-    $tempCountTypes = substr($types, 0, strlen($types)); // Copy types before limit/offset types are added
-
-    if (!empty($tempCountTypes)) {
-        $countStmt->bind_param($tempCountTypes, ...$tempCountParams);
-    }
+    $countStmt->bind_param($types, ...$params);
 }
 $countStmt->execute();
 $countResult = $countStmt->get_result();
 $totalResults = $countResult->fetch_assoc()['total'];
 $totalPages = ceil($totalResults / $limit);
-$countStmt->close(); // Close the count statement
+$countStmt->close();
 
-// Prepare the main data query
+// Default ORDER BY clause
+$orderBySql = "ORDER BY year DESC";
+$orderByParams = [];
+$orderByTypes = "";
+
+// If a search term is present, apply custom prioritization
+if ($search) {
+    $orderBySql = "
+        ORDER BY
+            CASE
+                WHEN title LIKE ? THEN 1
+                WHEN abstract LIKE ? THEN 2
+                WHEN ocrPdf LIKE ? THEN 3
+                ELSE 4
+            END,
+            year DESC
+    ";
+    // These parameters are specifically for the ORDER BY clause
+    $orderByParams = [$like, $like, $like];
+    $orderByTypes = "sss";
+}
+
+// Prepare the main data query with the dynamic ORDER BY
 $query = "
     SELECT id, title, authors, year, abstract, filename, Department, program, ocrPdf
     FROM research
     " . $whereSql . "
-    ORDER BY year DESC
+    " . $orderBySql . "
     LIMIT ? OFFSET ?
 ";
 
@@ -88,35 +104,39 @@ if (!$stmt) {
     die("Prepare failed for main query: (" . $conn->errno . ") " . $conn->error);
 }
 
-// Add limit and offset params to the main query's parameters and types
-$params[] = $limit;
-$params[] = $offset;
-$types .= "ii"; // Add types for limit and offset
+// Combine parameters: WHERE params + ORDER BY params + LIMIT/OFFSET params
+$finalParams = array_merge($params, $orderByParams);
+$finalTypes = $types . $orderByTypes;
 
-// Bind parameters for the main query
-// Note: Using a temporary array for bind_param is crucial if $params is modified after countStmt
-$finalBindParams = array_merge([], $params); // Create a fresh copy
-$stmt->bind_param($types, ...$finalBindParams);
+// Add limit and offset params for pagination
+$finalParams[] = $limit;
+$finalParams[] = $offset;
+$finalTypes .= "ii";
+
+// Bind the combined parameters for the main query
+if (!empty($finalTypes)) {
+    $stmt->bind_param($finalTypes, ...$finalParams);
+}
+
 $stmt->execute();
 $result = $stmt->get_result();
 
-// Get the latest year from the database for sidebar
+// Get the latest year from the database for the sidebar
 $latestYearQuery = "SELECT MAX(year) AS latest_year FROM research";
 $latestYearResult = $conn->query($latestYearQuery);
 $latestYearRow = $latestYearResult->fetch_assoc();
 $latestYear = $latestYearRow['latest_year'];
 
-// Determine years to display in the sidebar (latest 3 years)
+// Determine years to display in the sidebar
 $yearsToShow = [];
 if ($latestYear) {
     for ($i = 0; $i < 3; $i++) {
-        if (($latestYear - $i) >= 1900) { // Arbitrary lower bound to prevent negative years
+        if (($latestYear - $i) >= 1900) {
             $yearsToShow[] = $latestYear - $i;
         }
     }
 }
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -172,11 +192,11 @@ if ($latestYear) {
         .sidebar ul li a {
             display: block;
             padding: 8px 0;
-            color: #000000; /* Lighter blue for links on dark background */
+            color: #000000;
             text-decoration: none;
         }
         .sidebar ul li a:hover {
-            color: #263A56; /* Lighter blue for links on dark background */
+            color: #263A56;
         }
         .sidebar .active-year {
             font-weight: bold;
@@ -186,7 +206,7 @@ if ($latestYear) {
             color: #cccccc;
         }
         .sidebar form .btn-primary {
-            background-color: #263A56; /* Bootstrap 5 primary blue */
+            background-color: #263A56;
             border-color: #263A56;
         }
         .sidebar form .btn-primary:hover {
@@ -239,12 +259,12 @@ if ($latestYear) {
                             <div class="mb-2">
                                 <label for="year_start" class="form-label">Custom Range (Start):</label>
                                 <input type="number" id="year_start" name="year_start" class="form-control"
-                                        value="<?= htmlspecialchars($yearRangeStart) ?>" placeholder="e.g., 2010">
+                                       value="<?= htmlspecialchars($yearRangeStart) ?>" placeholder="e.g., 2010">
                             </div>
                             <div class="mb-2">
                                 <label for="year_end" class="form-label">Custom Range (End):</label>
                                 <input type="number" id="year_end" name="year_end" class="form-control"
-                                        value="<?= htmlspecialchars($yearRangeEnd) ?>" placeholder="e.g., 2015">
+                                       value="<?= htmlspecialchars($yearRangeEnd) ?>" placeholder="e.g., 2015">
                             </div>
                             <button type="submit" class="btn btn-outline-primary btn-sm w-100 mt-2">Apply Filter</button>
                         </form>
@@ -305,7 +325,7 @@ if ($latestYear) {
                             </div>
 
                             <?php if (!empty($row['ocrPdf'])): ?>
-                                <?php endif; ?>
+                            <?php endif; ?>
                         </div>
                     <?php endwhile; ?>
 
